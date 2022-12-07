@@ -292,7 +292,7 @@ rva_full %>%
 
 # MEGA DATASET =================================================================
 
-mega_data <- bls_full %>%
+okunslawdata <- bls_full %>%
   mutate(year = as.numeric(year)) %>%
   left_join(rva_full, by = c("industry", "year", "quarter")) %>%
   drop_na() %>%
@@ -316,8 +316,23 @@ mega_data <- bls_full %>%
                                   industry == "other" ~ "15",
                                   industry == "agriculture" ~ "16",
                                   industry == "government" ~ "17"))
-  
 
-write_xlsx(mega_data,"~/Thesis/mega_data.xlsx") 
+write_xlsx(okunslawdata,"~/thoron_thesis_reedcollege/okunslawdata.xlsx") 
+
+okunslawdata_agg <- okunslawdata %>%
+  filter(industry == "total") %>%
+  group_by(industry, year) %>%
+  summarise(unemployment_rate = mean(unemployment_rate),
+            gdp_rate = mean(gdp_rate))
+
+okunslawdata_other <- okunslawdata %>%
+  filter(industry == "construction" |
+         industry == "leisure" |
+         industry == "government") %>%
+  group_by(industry, year) %>%
+  summarise(unemployment_rate = mean(unemployment_rate),
+            gdp_rate = mean(gdp_rate)) %>%
+  pivot_wider(names_from = industry, values_from = c(year, unemployment_rate, gdp_rate))
+
 
 

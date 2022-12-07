@@ -15,6 +15,7 @@ library(tidyverse)
 library(tidyr)
 library(readr)
 library(writexl)
+library(ggthemes)
 
 
 
@@ -45,16 +46,16 @@ apiDF <- function(data){
 ## Function for renaming multiple data frames ----------------------------------
 
 # vector of industry names specifically ordered so that industry_names[i] corresponds to json$Results$series[[i]]
-industry_names <- c("total", "goods_producing",
+industry_names <- c("total", 
                     "mining", "construction", "manufacturing", "durable_goods", 
                     "nondurable_goods", "wholesale", "retail", "transportation", 
-                    "utilities", "information", "finance", "professional", 
+                    "utilities", "information", "financial", "professional", 
                     "education_health", "leisure", "other")
 
 ## Pull the data via the API ---------------------------------------------------
 
 payload_employees1 <- list(
-  'seriesid'=c('CES0500000001', 'CES0600000001', 
+  'seriesid'=c('CES0500000001',
                'CES1000000001', 'CES2000000001', 'CES3000000001', 'CES3100000001',
                'CES3200000001', 'CES4142000001', 'CES4200000001', 'CES4300000001', 
                'CES4422000001', 'CES5000000001', 'CES5500000001', 'CES6000000001',
@@ -88,7 +89,9 @@ for (i in 1:length(industry_names)) {
   # set temp to be the ith element in the list
   df_list_employees1[[i]] <- temp_pivot_employment
 }
-all_employees <- bind_rows(df_list_employees1) 
+all_employees <- bind_rows(df_list_employees1) %>%
+  drop_na(employment) %>%
+  arrange(industry, year, period) 
 
 
 
@@ -97,7 +100,7 @@ all_employees <- bind_rows(df_list_employees1)
 ## Pull the data via the API ---------------------------------------------------
 
 payload_awh1 <- list(
-  'seriesid'=c('CES0500000002', 'CES0600000002', 
+  'seriesid'=c('CES0500000002', 
                'CES1000000002','CES2000000002', 'CES3000000002', 'CES3100000002', 
                'CES3200000002', 'CES4142000002', 'CES4200000002', 'CES4300000002', 
                'CES4422000002', 'CES5000000002', 'CES5500000002', 'CES6000000002',
@@ -132,7 +135,10 @@ for (i in 1:length(industry_names)) {
   df_list_awh1[[i]] <- temp_pivot_awh
 }
 all_awh <- bind_rows(df_list_awh1) %>%
-  mutate(year = as.numeric(year))
+  mutate(year = as.numeric(year)) %>%
+  arrange(industry, year, period)
+
+
 
 # MERGE ========================================================================
 
@@ -167,70 +173,54 @@ employment_data$quarter <- factor(employment_data$quarter, levels = c("Q1","Q2",
 with(employment_data, aggregate(c(employment), list(quarter = quarter, year =
                                                       year), FUN = mean))
 
-df_list2<- list()
-# iterate through the industry names
-for (i in 1:length(industry_names)) {
-  
-  # The formula for gdp rate I'm using is: 
-  # Real GDP growth rate = (most recent years real GDP - the last years real GDP) / the previous years real GDP
-  employment_temp <- employment_data[employment_data$industry==industry_names[i],] %>%
-    mutate(year = as.numeric(year),
-           gdp = as.numeric(employment),
-           numerator = employment - lag(employment), # Difference in route between years
-           employ_rate = numerator/lag(employment) * 100)
-  
-  # set temp to be the ith element in the list
-  df_list2[[i]] <- employment_temp
-}
-
-# row bind all of the elements in the list
-employment_rate_data <- bind_rows(df_list2) %>%
+employment_data <- employment_data %>%
   group_by(industry, year, quarter) %>%
-  summarise(employment_rate = mean(employ_rate), awh = awh) %>%
-  ungroup()
-
-#employment_data <- employment_data %>%
-  #left_join(employment_rate_data, by = c("year", "period", "periodName", "industry"))
-  
-  
+  summarise(employment = mean(employment),
+            awh = mean(awh)) %>%
+  ungroup() %>%
+  mutate(input = awh*employment)
+#weekly rate (annual rate = multiply by 52)
 
 
 
 # BEA SECTION ==================================================================
 
-# For this section I pull data from BEA on Real Value Added by Industry
+# For this section I pull data from BEA on Real Gross Output by Industry
 # [Billions of 2012 chain dollars]
-# and I wrangle it to get Percent Change in Real Value Added by Industry
+# and I wrangle it to get Percent Change in Real Gross Output by Industry
 
 ## Upload CSV ------------------------------------------------------------------
 
-RGO <- read_csv("RGO.csv")
+RVA <- read_csv("RVA_2.csv")
 
 ## Wrangling into Tidy Format --------------------------------------------------
 
-# RGO_2 wrangling
-rgo <- RGO %>%
+# RVA_2 wrangling
+rva <- RVA %>%
+  select(-1) %>%
   filter(!row_number() %in% c(99, 102:107))
 
-colnames(rgo) = paste(sep ="", rgo[1,], colnames(rgo))
+colnames(rva) = paste(sep ="", rva[1,], colnames(rva))
 
-rgo_full <- rgo %>%
-  rename("industry" = "NA...1") %>%
+rva <- rva %>%
+  rename("industry" = "NA...2") %>%
   slice(-1) %>%
   pivot_longer(cols = -1,                        #the -1 tells it to skip the first column
                names_to = c("quarter", "year"),  #this tells it where we want the data to go
                names_pattern = c("(..)(....)"),  #this says to split columns based on a pattern of the first 4 characters
                values_to = "gdp")                #then the next 2 characters, so the date and the quarter, ex: (2002)(Q1)
 
-industies <- rgo_full %>%
+industies <- rva %>%
   count(industry)
+
+years <- rva %>%
+  count(year)
+
 
 ## Wrangling -------------------------------------------------------------------
 
-bea1 <- rgo_full %>%
-  filter(industry %in% c('Private industries',
-                         'Private goods-producing industries2',
-                         'Private services-producing industries3',
+rva_select <- rva %>%
+  filter(industry %in% c('Gross domestic product',
                          'Mining',
                          'Construction', 
                          'Manufacturing', 
@@ -246,8 +236,7 @@ bea1 <- rgo_full %>%
                          'Educational services, health care, and social assistance',
                          'Arts, entertainment, recreation, accommodation, and food services',
                          'Other services, except government')) %>%
-  mutate(industry = case_when(industry == "Private industries" ~ "total",
-                              industry == "Private goods-producing industries2" ~ "goods_producing",
+  mutate(industry = case_when(industry == "Gross domestic product" ~ "total", 
                               industry == "Mining" ~ "mining",
                               industry == "Construction" ~ "construction",
                               industry == "Manufacturing" ~ "manufacturing",
@@ -262,54 +251,92 @@ bea1 <- rgo_full %>%
                               industry == "Professional and business services" ~ "professional",
                               industry == "Educational services, health care, and social assistance" ~ "education_health",
                               industry == "Arts, entertainment, recreation, accommodation, and food services" ~ "leisure",
-                              industry == "Other services, except government" ~ "other"))
-
+                              industry == "Other services, except government" ~ "other")) %>%
+  mutate(year = as.numeric(year), 
+         gdp = as.numeric(gdp))
 
 
 # LABOR PRODUCTIVITY ===========================================================
 
-labor_productivity_data <- lp_input %>% # data starts in 2006!
-  mutate(input = awh*employment) %>%
-  group_by(industry, year, quarter) %>%
-  mutate(input = mean(input)) %>%
-  ungroup() %>%
-  left_join(bea2, by = c("year", "industry", "quarter")) %>%
-  drop_na(gdp) %>%
+labor_productivity_data <- employment_data %>% # data starts in 2006!
+  left_join(rva_select, by = c("year", "industry", "quarter")) %>%
   mutate(productivity = gdp/input) %>%
-  select(industry, year, quarter, productivity) %>%
-  unique() %>%
-  drop_na(productivity)
+  drop_na()
+#write_xlsx(labor_productivity_data_2,"~/thoron_thesis_reedcollege/laborproductivitydata.xlsx") 
 
-write_xlsx(labor_productivity_data,"~/Thesis/labor_productivity_data.xlsx") 
 
+
+# INDEX ========================================================================
+
+df_list_pp <- list()
+# iterate through the industry names
+for (i in 1:length(industry_names)) { # industry_names should still work
+  
+  base <- labor_productivity_data[labor_productivity_data$industry==industry_names[i],] %>%
+    filter(year == 2006, quarter == "Q2" ) %>%
+    #since it's seasonally adjusted, it's okay to use a quarter
+    select(productivity)
+  
+  base_productivity <- base$productivity[]
+  
+  labor_productivity_data_temp <- labor_productivity_data[labor_productivity_data$industry==industry_names[i],] %>%
+    select(industry, year, quarter, productivity) %>%
+    unique() %>%
+    drop_na(productivity) %>%
+    mutate(pp_index = (productivity/base_productivity)*100)
+  
+  # set temp to be the ith element in the list
+  df_list_pp[[i]] <- labor_productivity_data_temp
+}
+
+# row bind all of the elements in the list
+indexed_data <- bind_rows(df_list_pp)
+
+indexed_data_test <- indexed_data %>%
+  filter(year == 2006, quarter == "Q2" )
+
+
+
+# GGPLOT DATA ==================================================================
+
+indexed_data_2 <- indexed_data %>%
+  filter(industry == "total") %>%
+  group_by(industry, year) %>%
+  summarise(productivity = mean(productivity),
+            pp_index = mean(pp_index)) %>%
+  ungroup() 
+
+indexed_data %>%
+  count(industry)
 
 
 # GGPLOTS ======================================================================
+library(RColorBrewer)
+library(lattice)
 
-lp_1 <- labor_productivity_data %>%
-  filter(year >= 2006 & year <= 2016) %>%
-  group_by(industry) %>%
-  summarize(meanlp = mean(productivity)) %>%
-  mutate(period = "2006 - 2016")
+yearly_labor_productivity_data <- indexed_data %>%
+  group_by(industry, year) %>%
+  summarise(yearly_lp = mean(pp_index))
 
-lp_2 <- labor_productivity_data %>%
-  filter(year >= 2017 & year <= 2022) %>%
-  drop_na() %>%
-  group_by(industry) %>%
-  summarize(meanlp = mean(productivity)) %>%
-  mutate(period = "2017 - 2022")
-
-labor_production <- rbind(lp_1, lp_2)
-
-# Labor Productivity
-ggplot(labor_production, aes(x = industry, y = meanlp, fill = period)) +
-  geom_col(position = "dodge") +
-  labs(x = "Periods", y = "Labor Productivity", 
-       title = "Labor Productivity by for Two Periods") +
-  theme(axis.text.x = element_text(angle = 90, vjust = 0.6))
-
-ggplot(labor_productivity_data, aes(x = year, y = productivity, color = industry)) +
+ggplot(yearly_labor_productivity_data, aes(x = year, y = yearly_lp)) +
   geom_line() +
-  labs(x = "Years", y = "Labor Productivity", 
-       title = "Labor Productivity by Industry",
-       subtitle = "2006 to 2022") 
+  facet_wrap(~industry) +
+  labs(x = "Years", y = "Labor Productivity Index") +
+  theme_stata(scheme = "s2color") +
+  scale_colour_stata("s1color")
+
+colVec<-c(brewer.pal(10,"Set3"),brewer.pal(6,"Set3"))
+ltyVec<-rep(c("solid","dashed"),c(10,6))
+
+ggplot(yearly_labor_productivity_data, aes(x = year, y = yearly_lp, 
+                                           color = industry)) +
+  geom_line() +
+  labs(x = "Years", y = "Labor Productivity Index") +
+  theme_stata(scheme = "s2color") +
+  scale_colour_stata("s1color") +
+  scale_linetype_manual(values = c(rep("solid", 8), rep("dashed", 8))) +
+  scale_color_manual(values = c(brewer.pal(8, "Paired"), brewer.pal(8, "Dark2")))
+
+
+
+
